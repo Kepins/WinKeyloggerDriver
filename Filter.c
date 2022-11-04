@@ -17,7 +17,7 @@ DriverEntry(
     NTSTATUS            status;
     WDFDRIVER           hDriver;
 
-    KdPrint(("Keyboard filter DriverEntry\n"));
+    KdPrint(("Keyboard filter: DriverEntry\n"));
 
     //
     // Initialize driver config to control the attributes that
@@ -62,7 +62,7 @@ FilterEvtDeviceAdd(
     WDFDEVICE               device;
     WDF_IO_QUEUE_CONFIG     ioQueueConfig;
 
-    KdPrint(("Keyboard filter FilterEvtDeviceAdd\n"));
+    KdPrint(("Keyboard filter: FilterEvtDeviceAdd\n"));
 
     PAGED_CODE();
 
@@ -132,36 +132,20 @@ FilterEvtIoInternalDeviceControl(
     IN size_t        InputBufferLength,
     IN ULONG         IoControlCode
 )
-/*++
-
-Routine Description:
-
-    This routine is the dispatch routine for internal device control requests.
-
-Arguments:
-
-    Queue - Handle to the framework queue object that is associated
-            with the I/O request.
-    Request - Handle to a framework request object.
-
-    OutputBufferLength - length of the request's output buffer,
-                        if an output buffer is available.
-    InputBufferLength - length of the request's input buffer,
-                        if an input buffer is available.
-
-    IoControlCode - the driver-defined or system-defined I/O control code
-                    (IOCTL) that is associated with the request.
-
---*/
 {
     PFILTER_EXTENSION               filterExt;
     NTSTATUS                        status = STATUS_SUCCESS;
     WDFDEVICE                       device;
+    PCONNECT_DATA                   connectData = NULL;
+    size_t                          length;
+
 
     UNREFERENCED_PARAMETER(OutputBufferLength);
     UNREFERENCED_PARAMETER(InputBufferLength);
 
-    KdPrint(("Entered FilterEvtIoInternalDeviceControl\n"));
+    PAGED_CODE();
+
+    KdPrint(("Keyboard filter: EvtIoInternalDeviceControl\n"));
 
     device = WdfIoQueueGetDevice(Queue);
 
@@ -170,8 +154,49 @@ Arguments:
     switch (IoControlCode) {
 
         //
-        // Put your cases for handling IOCTLs here
+        // Connect a keyboard class device driver to the port driver.
         //
+        case IOCTL_INTERNAL_KEYBOARD_CONNECT:
+            //
+            // Only allow one connection.
+            //
+            if (filterExt->UpperConnectData.ClassService != NULL) {
+                status = STATUS_SHARING_VIOLATION;
+                break;
+            }
+
+            //
+            // Get the input buffer from the request
+            // (Parameters.DeviceIoControl.Type3InputBuffer).
+            //
+            status = WdfRequestRetrieveInputBuffer(Request,
+                sizeof(CONNECT_DATA),
+                &connectData,
+                &length);
+            if (!NT_SUCCESS(status)) {
+                KdPrint(("WdfRequestRetrieveInputBuffer failed %x\n", status));
+                break;
+            }
+
+            NT_ASSERT(length == InputBufferLength);
+
+            filterExt->UpperConnectData = *connectData;
+
+            //
+            // Hook into the report chain.  Everytime a keyboard packet is reported
+            // to the system, KbFilter_ServiceCallback will be called
+            //
+            connectData->ClassDeviceObject = WdfDeviceWdmGetDeviceObject(device);
+
+    #pragma warning(disable:4152)  //nonstandard extension, function/data pointer conversion
+
+            connectData->ClassService = FilterServiceCallback;
+
+    #pragma warning(default:4152)
+
+            break;
+        default:
+            break;
     }
 
     if (!NT_SUCCESS(status)) {
@@ -197,6 +222,31 @@ Arguments:
 
     return;
 }
+
+VOID
+FilterServiceCallback(
+    IN PDEVICE_OBJECT  DeviceObject,
+    IN PKEYBOARD_INPUT_DATA InputDataStart,
+    IN PKEYBOARD_INPUT_DATA InputDataEnd,
+    IN OUT PULONG InputDataConsumed
+)
+{
+    PFILTER_EXTENSION   filterExt;
+    WDFDEVICE           device;
+
+    KdPrint(("Keyboard filter: FilterServiceCallback\n"));
+
+    device = WdfWdmDeviceGetWdfDeviceHandle(DeviceObject);
+
+    filterExt = FilterGetData(device);
+
+    (*(PSERVICE_CALLBACK_ROUTINE)(ULONG_PTR)filterExt->UpperConnectData.ClassService)(
+        filterExt->UpperConnectData.ClassDeviceObject,
+        InputDataStart,
+        InputDataEnd,
+        InputDataConsumed);
+}
+
 
 VOID
 FilterForwardRequest(

