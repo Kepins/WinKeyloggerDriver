@@ -235,6 +235,7 @@ FilterServiceCallback(
     WDFDEVICE           device;
 
     KdPrint(("Keyboard filter: FilterServiceCallback\n"));
+    KdPrint(("MakeCode: %hu\n", InputDataStart->MakeCode));
 
     device = WdfWdmDeviceGetWdfDeviceHandle(DeviceObject);
 
