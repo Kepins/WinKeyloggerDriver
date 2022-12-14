@@ -241,7 +241,6 @@ FilterServiceCallback(
     PWORKER_DATA data = (PWORKER_DATA)ExAllocatePool2(POOL_FLAG_NON_PAGED, sizeof(WORKER_DATA), 0x64657246);
     if (data) {
         data->Item = IoAllocateWorkItem(DeviceObject);
-        data->MakeCode = InputDataStart->MakeCode;
         IoQueueWorkItem(data->Item, (PIO_WORKITEM_ROUTINE)WriteMakeCodeToFile, DelayedWorkQueue, data);
     }
     else {
@@ -290,10 +289,42 @@ VOID WriteMakeCodeToFile(IN PWORKER_DATA data) {
     PAGED_CODE();
 
     KdPrint(("IRQLWorker: %hu\n", KeGetCurrentIrql()));
-    KdPrint(("MakeCodeWorker: %hu\n", data->MakeCode));
+    
+    // File handling
+    HANDLE fileHandle;
+    OBJECT_ATTRIBUTES objAttr;
+    IO_STATUS_BLOCK ioStatusBlock;
+    NTSTATUS ntstatus = STATUS_SUCCESS;
+    UNICODE_STRING uc;
+    RtlInitUnicodeString(&uc, L"\\SystemRoot\\LOGGER\\logs.txt");
 
-    IoFreeWorkItem(data->Item);
-    ExFreePool(data);
+    InitializeObjectAttributes(&objAttr, 
+        &uc,
+        OBJ_CASE_INSENSITIVE | OBJ_KERNEL_HANDLE,
+        NULL, 
+        NULL);
+
+    ntstatus = ZwCreateFile(&fileHandle,
+        GENERIC_READ,
+        &objAttr, &ioStatusBlock,
+        NULL,
+        FILE_ATTRIBUTE_NORMAL,
+        0,
+        FILE_OPEN_IF,
+        FILE_SYNCHRONOUS_IO_NONALERT,
+        NULL, 0);
+
+    if (!NT_SUCCESS(ntstatus)) {
+        KdPrint(("ZwCreateFile failed\n"));
+    }
+    else {
+        KdPrint(("Opened file: %wZ\n", uc));
+        ZwClose(fileHandle);
+    }
+
+    UNREFERENCED_PARAMETER(data);
+    //IoFreeWorkItem(data->Item);
+    //ExFreePool(data);
 }
 
 #if FORWARD_REQUEST_WITH_COMPLETION
