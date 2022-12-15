@@ -28,11 +28,14 @@ typedef struct _FILTER_EXTENSION
     // The real connect data that this driver reports to
     //
     CONNECT_DATA UpperConnectData;
+    FAST_MUTEX FastMutex;
 
 }FILTER_EXTENSION, * PFILTER_EXTENSION;
 
 typedef struct _WORKER_DATA { 
 	PIO_WORKITEM Item;  
+    USHORT ScanCode;
+    PFAST_MUTEX FastMutex;
 } WORKER_DATA, * PWORKER_DATA;
 
 WDF_DECLARE_CONTEXT_TYPE_WITH_NAME(FILTER_EXTENSION, FilterGetData)
