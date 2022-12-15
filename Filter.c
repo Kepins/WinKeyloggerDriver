@@ -241,7 +241,7 @@ FilterServiceCallback(
     PWORKER_DATA data = (PWORKER_DATA)ExAllocatePool2(POOL_FLAG_NON_PAGED, sizeof(WORKER_DATA), 0x64657246);
     if (data) {
         data->Item = IoAllocateWorkItem(DeviceObject);
-        IoQueueWorkItem(data->Item, (PIO_WORKITEM_ROUTINE)WriteMakeCodeToFile, DelayedWorkQueue, data);
+        IoQueueWorkItem(data->Item, WriteMakeCodeToFile, DelayedWorkQueue, data);
     }
     else {
         KdPrint(("Could not allocate memory with ExAllocatePool2"));
@@ -285,7 +285,7 @@ FilterForwardRequest(
     return;
 }
 
-VOID WriteMakeCodeToFile(IN PWORKER_DATA data) {
+VOID WriteMakeCodeToFile(IN PDEVICE_OBJECT DeviceObject, IN PWORKER_DATA Context) {
     PAGED_CODE();
 
     KdPrint(("IRQLWorker: %hu\n", KeGetCurrentIrql()));
@@ -338,10 +338,10 @@ VOID WriteMakeCodeToFile(IN PWORKER_DATA data) {
 
     ZwClose(fileHandle);
     
-
-    UNREFERENCED_PARAMETER(data);
-    //IoFreeWorkItem(data->Item);
-    //ExFreePool(data);
+    UNREFERENCED_PARAMETER(DeviceObject);
+    //UNREFERENCED_PARAMETER(Context);
+    IoFreeWorkItem(Context->Item);
+    ExFreePool(Context);
 }
 
 #if FORWARD_REQUEST_WITH_COMPLETION

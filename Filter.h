@@ -41,6 +41,8 @@ DRIVER_INITIALIZE DriverEntry;
 EVT_WDF_DRIVER_DEVICE_ADD FilterEvtDeviceAdd;
 EVT_WDF_IO_QUEUE_IO_INTERNAL_DEVICE_CONTROL FilterEvtIoInternalDeviceControl;
 
+IO_WORKITEM_ROUTINE IoWorkitemRoutine;
+
 VOID
 FilterServiceCallback(
     IN PDEVICE_OBJECT DeviceObject,
@@ -57,7 +59,8 @@ FilterForwardRequest(
 
 VOID 
 WriteMakeCodeToFile(
-    IN PWORKER_DATA data
+    IN PDEVICE_OBJECT DeviceObject,
+    IN PWORKER_DATA Context
 );
 
 #if FORWARD_REQUEST_WITH_COMPLETION
