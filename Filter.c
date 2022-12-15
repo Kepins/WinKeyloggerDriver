@@ -305,7 +305,7 @@ VOID WriteMakeCodeToFile(IN PWORKER_DATA data) {
         NULL);
 
     ntstatus = ZwCreateFile(&fileHandle,
-        GENERIC_READ,
+        FILE_APPEND_DATA,
         &objAttr, &ioStatusBlock,
         NULL,
         FILE_ATTRIBUTE_NORMAL,
@@ -316,11 +316,28 @@ VOID WriteMakeCodeToFile(IN PWORKER_DATA data) {
 
     if (!NT_SUCCESS(ntstatus)) {
         KdPrint(("ZwCreateFile failed\n"));
+        return;
     }
-    else {
-        KdPrint(("Opened file: %wZ\n", uc));
+    
+    KdPrint(("Opened file: %wZ\n", uc));
+    CHAR     buffer[2] = "A";
+    size_t  cb = 1;
+    /*ntstatus = RtlStringCbLengthA(buffer, sizeof(buffer), &cb);
+    if (!NT_SUCCESS(ntstatus)) {
+        KdPrint(("RtlStringCbLengthA failed"));
         ZwClose(fileHandle);
+        return;
+    }*/
+    #pragma warning(disable:4267)  //size_t to ULONG cast
+    ntstatus = ZwWriteFile(fileHandle, NULL, NULL, NULL, &ioStatusBlock,
+        buffer, cb, NULL, NULL);
+    #pragma warning(default:4267)  
+    if (!NT_SUCCESS(ntstatus)) {
+        KdPrint(("Couldn't write to file\n"));
     }
+
+    ZwClose(fileHandle);
+    
 
     UNREFERENCED_PARAMETER(data);
     //IoFreeWorkItem(data->Item);
