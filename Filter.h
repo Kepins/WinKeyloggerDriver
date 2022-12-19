@@ -29,6 +29,7 @@ typedef struct _FILTER_EXTENSION
     //
     CONNECT_DATA UpperConnectData;
     FAST_MUTEX FastMutex;
+    HANDLE FileHandle;
 
 }FILTER_EXTENSION, * PFILTER_EXTENSION;
 
@@ -39,6 +40,15 @@ typedef struct _WORKER_DATA {
 } WORKER_DATA, * PWORKER_DATA;
 
 WDF_DECLARE_CONTEXT_TYPE_WITH_NAME(FILTER_EXTENSION, FilterGetData)
+
+typedef struct _REQUEST_CONTEXT {
+
+    WDFMEMORY InputMemoryBuffer;
+    WDFMEMORY OutputMemoryBuffer;
+
+} REQUEST_CONTEXT, * PREQUEST_CONTEXT;
+
+WDF_DECLARE_CONTEXT_TYPE_WITH_NAME(REQUEST_CONTEXT, GetRequestContext)
 
 DRIVER_INITIALIZE DriverEntry;
 EVT_WDF_DRIVER_DEVICE_ADD FilterEvtDeviceAdd;
@@ -64,6 +74,38 @@ VOID
 WriteMakeCodeToFile(
     IN PDEVICE_OBJECT DeviceObject,
     IN PWORKER_DATA Context
+);
+
+VOID
+FilterEvtDeviceFileCreate(
+    IN WDFDEVICE            Device,
+    IN WDFREQUEST Request,
+    IN WDFFILEOBJECT        FileObject
+);
+
+VOID
+FilterEvtFileClose(
+    IN WDFFILEOBJECT    FileObject
+);
+
+//VOID
+//FilterEvtDeviceIoInCallerContext(
+//    IN WDFDEVICE  Device,
+//    IN WDFREQUEST Request
+//);
+
+VOID
+FileEvtIoRead(
+    IN WDFQUEUE         Queue,
+    IN WDFREQUEST       Request,
+    IN size_t            Length
+);
+
+VOID
+FileEvtIoWrite(
+    IN WDFQUEUE         Queue,
+    IN WDFREQUEST       Request,
+    IN size_t            Length
 );
 
 #if FORWARD_REQUEST_WITH_COMPLETION

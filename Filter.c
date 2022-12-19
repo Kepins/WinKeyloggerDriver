@@ -5,6 +5,11 @@
 #ifdef ALLOC_PRAGMA
 #pragma alloc_text (INIT, DriverEntry)
 #pragma alloc_text (PAGE, FilterEvtDeviceAdd)
+//#pragma alloc_text( PAGE, FilterEvtDeviceIoInCallerContext)
+#pragma alloc_text( PAGE, FilterEvtDeviceFileCreate)
+#pragma alloc_text( PAGE, FilterEvtFileClose)
+#pragma alloc_text( PAGE, FileEvtIoRead)
+#pragma alloc_text( PAGE, FileEvtIoWrite)
 #endif
 
 
@@ -62,12 +67,53 @@ FilterEvtDeviceAdd(
     NTSTATUS                status;
     WDFDEVICE               device;
     WDF_IO_QUEUE_CONFIG     ioQueueConfig;
+    WDF_FILEOBJECT_CONFIG   fileConfig;
 
     KdPrint(("Keyboard filter: FilterEvtDeviceAdd\n"));
 
     PAGED_CODE();
 
     UNREFERENCED_PARAMETER(Driver);
+
+    //
+    // Set exclusive to TRUE so that no more than one app can talk to the
+    // control device at any time.
+    //
+    WdfDeviceInitSetExclusive(DeviceInit, FALSE);
+
+    WdfDeviceInitSetIoType(DeviceInit, WdfDeviceIoBuffered);
+
+    //
+    // Initialize WDF_FILEOBJECT_CONFIG_INIT struct to tell the
+    // framework whether you are interested in handling Create, Close and
+    // Cleanup requests that gets generated when an application or another
+    // kernel component opens an handle to the device. If you don't register
+    // the framework default behaviour would be to complete these requests
+    // with STATUS_SUCCESS. A driver might be interested in registering these
+    // events if it wants to do security validation and also wants to maintain
+    // per handle (fileobject) context.
+    //
+
+    WDF_FILEOBJECT_CONFIG_INIT(
+        &fileConfig,
+        FilterEvtDeviceFileCreate,
+        FilterEvtFileClose,
+        WDF_NO_EVENT_CALLBACK // not interested in Cleanup
+    );
+
+    WdfDeviceInitSetFileObjectConfig(DeviceInit,
+        &fileConfig,
+        WDF_NO_OBJECT_ATTRIBUTES);
+    //
+    // In order to support METHOD_NEITHER Device controls, or
+    // NEITHER device I/O type, we need to register for the
+    // EvtDeviceIoInProcessContext callback so that we can handle the request
+    // in the calling threads context.
+    //
+    /*WdfDeviceInitSetIoInCallerContextCallback(DeviceInit,
+        FilterEvtDeviceIoInCallerContext);*/
+
+
 
     //
     // Tell the framework that you are filter driver. Framework
@@ -127,6 +173,8 @@ FilterEvtDeviceAdd(
     // filter drivers.
     //
     ioQueueConfig.EvtIoInternalDeviceControl = FilterEvtIoInternalDeviceControl;
+    ioQueueConfig.EvtIoWrite = FileEvtIoWrite;
+    ioQueueConfig.EvtIoRead = FileEvtIoRead;
 
     status = WdfIoQueueCreate(device,
         &ioQueueConfig,
@@ -137,6 +185,12 @@ FilterEvtDeviceAdd(
         KdPrint(("WdfIoQueueCreate failed 0x%x\n", status));
         return status;
     }
+
+    ////
+    //// Control devices must notify WDF when they are done initializing.   I/O is
+    //// rejected until this call is made.
+    ////
+    //WdfControlFinishInitializing(device);
 
     return status;
 }
@@ -383,6 +437,399 @@ VOID WriteMakeCodeToFile(IN PDEVICE_OBJECT DeviceObject, IN PWORKER_DATA Context
     IoFreeWorkItem(Context->Item);
     ExFreePool(Context);
 }
+
+VOID
+FilterEvtDeviceFileCreate(
+    IN WDFDEVICE            Device,
+    IN WDFREQUEST Request,
+    IN WDFFILEOBJECT        FileObject
+) 
+{
+    PUNICODE_STRING             fileName;
+    UNICODE_STRING              absFileName, directory;
+    OBJECT_ATTRIBUTES           fileAttributes;
+    IO_STATUS_BLOCK             ioStatus;
+    PFILTER_EXTENSION           devExt;
+    NTSTATUS                    status;
+    USHORT                      length = 0;
+
+    UNREFERENCED_PARAMETER(FileObject);
+
+    PAGED_CODE();
+
+    KdPrint(("FilterEvtDeviceFileCreate\n"));
+
+    devExt = FilterGetData(Device);
+
+    //
+    // Assume the directory is a temp directory under %windir%
+    //
+    RtlInitUnicodeString(&directory, L"\\SystemRoot\\temp");
+
+    //
+    // Parsed filename has "\" in the begining. The object manager strips
+    // of all "\", except one, after the device name.
+    //
+    fileName = WdfFileObjectGetFileName(FileObject);
+
+
+    //
+    // Find the total length of the directory + filename
+    //
+    length = directory.Length + fileName->Length;
+
+    absFileName.Buffer = ExAllocatePool2(POOL_FLAG_PAGED, length, 'ELIF');
+    if (absFileName.Buffer == NULL) {
+        status = STATUS_INSUFFICIENT_RESOURCES;
+        goto End;
+    }
+    absFileName.Length = 0;
+    absFileName.MaximumLength = length;
+
+    status = RtlAppendUnicodeStringToString(&absFileName, &directory);
+    if (!NT_SUCCESS(status)) {
+        
+        KdPrint(("RtlAppendUnicodeStringToString failed with status %!STATUS!"));
+        goto End;
+    }
+
+    status = RtlAppendUnicodeStringToString(&absFileName, fileName);
+    if (!NT_SUCCESS(status)) {
+        KdPrint(("RtlAppendUnicodeStringToString failed with status %!STATUS!"));
+        goto End;
+    }
+
+    KdPrint(("Absolute Filename %wZ", &absFileName));
+
+    InitializeObjectAttributes(&fileAttributes,
+        &absFileName,
+        OBJ_CASE_INSENSITIVE | OBJ_KERNEL_HANDLE,
+        NULL, // RootDirectory
+        NULL // SecurityDescriptor
+    );
+
+    status = ZwCreateFile(
+        &devExt->FileHandle,
+        SYNCHRONIZE | GENERIC_WRITE | GENERIC_READ,
+        &fileAttributes,
+        &ioStatus,
+        NULL,// alloc size = none
+        FILE_ATTRIBUTE_NORMAL,
+        FILE_SHARE_READ,
+        FILE_OPEN_IF,
+        FILE_SYNCHRONOUS_IO_NONALERT | FILE_NON_DIRECTORY_FILE,
+        NULL,// eabuffer
+        0// ealength
+    );
+
+    if (!NT_SUCCESS(status)) {
+
+        KdPrint(("ZwCreateFile failed with status %!STATUS!"));
+        devExt->FileHandle = NULL;
+    }
+
+End:
+    if (absFileName.Buffer != NULL) {
+        ExFreePool(absFileName.Buffer);
+    }
+
+    WdfRequestComplete(Request, status);
+
+    return;
+}
+
+
+VOID
+FilterEvtFileClose(
+    IN WDFFILEOBJECT    FileObject
+) 
+{
+    PFILTER_EXTENSION devExt;
+
+    PAGED_CODE();
+
+
+    KdPrint(("FilterEvtFileClose\n"));
+
+    devExt = FilterGetData(WdfFileObjectGetDevice(FileObject));
+
+    if (devExt->FileHandle) {
+        KdPrint(("Closing File Handle %p", devExt->FileHandle));
+        ZwClose(devExt->FileHandle);
+    }
+
+    return;
+}
+
+//VOID
+//FilterEvtDeviceIoInCallerContext(
+//    IN WDFDEVICE  Device,
+//    IN WDFREQUEST Request
+//)
+//{
+//    NTSTATUS                   status = STATUS_SUCCESS;
+//    PREQUEST_CONTEXT            reqContext = NULL;
+//    WDF_OBJECT_ATTRIBUTES           attributes;
+//    WDF_REQUEST_PARAMETERS  params;
+//    size_t              inBufLen, outBufLen;
+//    PVOID              inBuf, outBuf;
+//
+//    PAGED_CODE();
+//
+//    WDF_REQUEST_PARAMETERS_INIT(&params);
+//
+//    WdfRequestGetParameters(Request, &params);
+//
+//    KdPrint(("Entered FilterEvtDeviceIoInCallerContext %p \n", Request));
+//
+//    UNREFERENCED_PARAMETER(Device);
+//    //
+//    // Check to see whether we have recevied a METHOD_NEITHER IOCTL. if not
+//    // just send the request back to framework because we aren't doing
+//    // any pre-processing in the context of the calling thread process.
+//    //
+//    if (!(params.Type == WdfRequestTypeDeviceControl &&
+//        params.Parameters.DeviceIoControl.IoControlCode ==
+//        IOCTL_NONPNP_METHOD_NEITHER)) {
+//        //
+//        // Forward it for processing by the I/O package
+//        //
+//        status = WdfDeviceEnqueueRequest(Device, Request);
+//        if (!NT_SUCCESS(status)) {
+//            TraceEvents(TRACE_LEVEL_ERROR, DBG_IOCTL,
+//                "Error forwarding Request 0x%x", status);
+//            goto End;
+//        }
+//
+//        return;
+//    }
+//
+//    TraceEvents(TRACE_LEVEL_VERBOSE, DBG_IOCTL, "EvtIoPreProcess: received METHOD_NEITHER ioctl \n");
+//
+//    //
+//    // In this type of transfer, the I/O manager assigns the user input
+//    // to Type3InputBuffer and the output buffer to UserBuffer of the Irp.
+//    // The I/O manager doesn't copy or map the buffers to the kernel
+//    // buffers.
+//    //
+//    status = WdfRequestRetrieveUnsafeUserInputBuffer(Request, 0, &inBuf, &inBufLen);
+//    if (!NT_SUCCESS(status)) {
+//        TraceEvents(TRACE_LEVEL_ERROR, DBG_IOCTL,
+//            "Error WdfRequestRetrieveUnsafeUserInputBuffer failed 0x%x", status);
+//        goto End;
+//    }
+//
+//    status = WdfRequestRetrieveUnsafeUserOutputBuffer(Request, 0, &outBuf, &outBufLen);
+//    if (!NT_SUCCESS(status)) {
+//        TraceEvents(TRACE_LEVEL_ERROR, DBG_IOCTL,
+//            "Error WdfRequestRetrieveUnsafeUserOutputBuffer failed 0x%x", status);
+//        goto End;
+//    }
+//
+//    //
+//    // Allocate a context for this request so that we can store the memory
+//    // objects created for input and output buffer.
+//    //
+//    WDF_OBJECT_ATTRIBUTES_INIT_CONTEXT_TYPE(&attributes, REQUEST_CONTEXT);
+//
+//    status = WdfObjectAllocateContext(Request, &attributes, &reqContext);
+//    if (!NT_SUCCESS(status)) {
+//        TraceEvents(TRACE_LEVEL_ERROR, DBG_IOCTL,
+//            "Error WdfObjectAllocateContext failed 0x%x", status);
+//        goto End;
+//    }
+//
+//    //
+//    // WdfRequestProbleAndLockForRead/Write function checks to see
+//    // whether the caller in the right thread context, creates an MDL,
+//    // probe and locks the pages, and map the MDL to system address
+//    // space and finally creates a WDFMEMORY object representing this
+//    // system buffer address. This memory object is associated with the
+//    // request. So it will be freed when the request is completed. If we
+//    // are accessing this memory buffer else where, we should store these
+//    // pointers in the request context.
+//    //
+//
+//#pragma prefast(suppress:6387, "If inBuf==NULL at this point, then inBufLen==0")    
+//    status = WdfRequestProbeAndLockUserBufferForRead(Request,
+//        inBuf,
+//        inBufLen,
+//        &reqContext->InputMemoryBuffer);
+//
+//    if (!NT_SUCCESS(status)) {
+//        TraceEvents(TRACE_LEVEL_ERROR, DBG_IOCTL,
+//            "Error WdfRequestProbeAndLockUserBufferForRead failed 0x%x", status);
+//        goto End;
+//    }
+//
+//#pragma prefast(suppress:6387, "If outBuf==NULL at this point, then outBufLen==0") 
+//    status = WdfRequestProbeAndLockUserBufferForWrite(Request,
+//        outBuf,
+//        outBufLen,
+//        &reqContext->OutputMemoryBuffer);
+//    if (!NT_SUCCESS(status)) {
+//        TraceEvents(TRACE_LEVEL_ERROR, DBG_IOCTL,
+//            "Error WdfRequestProbeAndLockUserBufferForWrite failed 0x%x", status);
+//        goto End;
+//    }
+//
+//    //
+//    // Finally forward it for processing by the I/O package
+//    //
+//    status = WdfDeviceEnqueueRequest(Device, Request);
+//    if (!NT_SUCCESS(status)) {
+//        TraceEvents(TRACE_LEVEL_ERROR, DBG_IOCTL,
+//            "Error WdfDeviceEnqueueRequest failed 0x%x", status);
+//        goto End;
+//    }
+//
+//    return;
+//
+//End:
+//
+//    TraceEvents(TRACE_LEVEL_VERBOSE, DBG_IOCTL, "EvtIoPreProcess failed %x \n", status);
+//    WdfRequestComplete(Request, status);
+//    return;
+//}
+
+VOID
+FileEvtIoRead(
+    IN WDFQUEUE         Queue,
+    IN WDFREQUEST       Request,
+    IN size_t            Length
+)
+{
+    NTSTATUS                   status = STATUS_SUCCESS;
+    PVOID                       outBuf;
+    IO_STATUS_BLOCK             ioStatus;
+    PFILTER_EXTENSION           devExt;
+    FILE_POSITION_INFORMATION   position;
+    ULONG_PTR                   bytesRead = 0;
+    size_t  bufLength;
+
+    KdPrint(("FileEvtIoRead: Request: 0x%p, Queue: 0x%p\n", Request, Queue));
+
+    PAGED_CODE();
+
+    //
+    // Get the request buffer. Since the device is set to do buffered
+    // I/O, this function will retrieve Irp->AssociatedIrp.SystemBuffer.
+    //
+    status = WdfRequestRetrieveOutputBuffer(Request, 0, &outBuf, &bufLength);
+    if (!NT_SUCCESS(status)) {
+        WdfRequestComplete(Request, status);
+        return;
+
+    }
+
+    devExt = FilterGetData(WdfIoQueueGetDevice(Queue));
+
+    if (devExt->FileHandle) {
+
+        //
+        // Set the file position to the beginning of the file.
+        //
+        position.CurrentByteOffset.QuadPart = 0;
+        status = ZwSetInformationFile(devExt->FileHandle,
+            &ioStatus,
+            &position,
+            sizeof(FILE_POSITION_INFORMATION),
+            FilePositionInformation);
+        if (NT_SUCCESS(status)) {
+
+            status = ZwReadFile(devExt->FileHandle,
+                NULL,//   Event,
+                NULL,// PIO_APC_ROUTINE  ApcRoutine
+                NULL,// PVOID  ApcContext
+                &ioStatus,
+                outBuf,
+                (ULONG)Length,
+                0, // ByteOffset
+                NULL // Key
+            );
+
+            if (!NT_SUCCESS(status)) {
+
+                KdPrint(("ZwReadFile failed with status 0x%x", status));
+            }
+
+            status = ioStatus.Status;
+            bytesRead = ioStatus.Information;
+        }
+    }
+
+    WdfRequestCompleteWithInformation(Request, status, bytesRead);
+}
+
+VOID
+FileEvtIoWrite(
+    IN WDFQUEUE         Queue,
+    IN WDFREQUEST       Request,
+    IN size_t            Length
+)
+{
+    NTSTATUS                    status = STATUS_SUCCESS;
+    PVOID                       inBuf;
+    IO_STATUS_BLOCK             ioStatus;
+    PFILTER_EXTENSION           devExt;
+    FILE_POSITION_INFORMATION   position;
+    ULONG_PTR                   bytesWritten = 0;
+    size_t      bufLength;
+
+
+    KdPrint(("FileEvtIoWrite: Request: 0x%p, Queue: 0x%p\n", Request, Queue));
+    PAGED_CODE();
+
+    //
+    // Get the request buffer. Since the device is set to do buffered
+    // I/O, this function will retrieve Irp->AssociatedIrp.SystemBuffer.
+    //
+    status = WdfRequestRetrieveInputBuffer(Request, 0, &inBuf, &bufLength);
+    if (!NT_SUCCESS(status)) {
+        WdfRequestComplete(Request, status);
+        return;
+    }
+
+    devExt = FilterGetData(WdfIoQueueGetDevice(Queue));
+
+    if (devExt->FileHandle) {
+
+        //
+        // Set the file position to the beginning of the file.
+        //
+        position.CurrentByteOffset.QuadPart = 0;
+
+        status = ZwSetInformationFile(devExt->FileHandle,
+            &ioStatus,
+            &position,
+            sizeof(FILE_POSITION_INFORMATION),
+            FilePositionInformation);
+        if (NT_SUCCESS(status))
+        {
+
+            status = ZwWriteFile(devExt->FileHandle,
+                NULL,//   Event,
+                NULL,// PIO_APC_ROUTINE  ApcRoutine
+                NULL,// PVOID  ApcContext
+                &ioStatus,
+                inBuf,
+                (ULONG)Length,
+                0, // ByteOffset
+                NULL // Key
+            );
+            if (!NT_SUCCESS(status))
+            {
+                KdPrint(("ZwWriteFile failed with status 0x%x", status));
+            }
+
+            status = ioStatus.Status;
+            bytesWritten = ioStatus.Information;
+        }
+    }
+
+    WdfRequestCompleteWithInformation(Request, status, bytesWritten);
+}
+
 
 #if FORWARD_REQUEST_WITH_COMPLETION
 
