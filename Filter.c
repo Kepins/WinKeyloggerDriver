@@ -103,6 +103,13 @@ FilterEvtDeviceAdd(
         return status;
     }
 
+    DECLARE_CONST_UNICODE_STRING(MySymbolicLink, L"\\DosDevices\\KeyloggerDriverDevice");
+    status = WdfDeviceCreateSymbolicLink(device, &MySymbolicLink);
+    if (!NT_SUCCESS(status)) {
+        KdPrint(("WdfDeviceCreateSymbolicLink failed with status code 0x%x\n", status));
+        return status;
+    }
+
     filterExt = FilterGetData(device);
 
     //
