@@ -83,6 +83,15 @@ FilterEvtDeviceAdd(
 
     WDF_OBJECT_ATTRIBUTES_INIT_CONTEXT_TYPE(&deviceAttributes, FILTER_EXTENSION);
 
+    DECLARE_CONST_UNICODE_STRING(MyDeviceName, L"\\Device\\KeyloggerDriverDevice");
+    status = WdfDeviceInitAssignName(
+        DeviceInit,
+        &MyDeviceName
+    );
+    if (!NT_SUCCESS(status)) {
+        KdPrint(("WdfDeviceInitAssignName failed with status code 0x%x\n", status));
+        return status;
+    }
     //
     // Create a framework device object.This call will inturn create
     // a WDM deviceobject, attach to the lower stack and set the
